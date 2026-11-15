@@ -550,6 +550,43 @@ function renderMyOrders() {
 function cancelOrder(orderId) {
   if (confirm("هل أنت متأكد من إلغاء هذا الطلب؟")) {
     let orders = JSON.parse(localStorage.getItem("mn_orders") || "[]");
+    const orderToCancel = orders.find(o => o.id === orderId);
+    
+    if (orderToCancel) {
+      let itemsDetailsText = "";
+      orderToCancel.items.forEach((item, index) => {
+        itemsDetailsText += `  ${index + 1}. ${item.name} | الكمية: ${item.qty} | السعر: ${money(item.price * item.qty)}\n`;
+      });
+
+      const now = new Date();
+      const timeString = now.toLocaleDateString('ar-EG') + ' | ' + now.toLocaleTimeString('ar-EG', {hour: '2-digit', minute:'2-digit', hour12: true});
+
+      let telegramMsg = `❌ *تم إلغاء طلب بنجاح!* 🚫
+━━━━━━━━━━━━━━━━━━━
+🆔 *رقم الطلب:* #${orderToCancel.id}
+🕒 *وقت الإلغاء:* ${timeString}
+━━━━━━━━━━━━━━━━━━━
+👤 *بيانات العميل:*
+▪️ *الاسم:* ${orderToCancel.name}
+▪️ *الهاتف:* ${orderToCancel.phone}
+━━━━━━━━━━━━━━━━━━━
+📍 *عنوان التوصيل:*
+▪️ *المحافظة:* ${orderToCancel.custGov}
+▪️ *المركز/القسم:* ${orderToCancel.custMarkaz}
+▪️ *التفاصيل:* ${orderToCancel.custAddress}
+━━━━━━━━━━━━━━━━━━━
+📦 *المنتجات الملغاة:*
+${itemsDetailsText}━━━━━━━━━━━━━━━━━━━
+💰 *الإجمالي الكلي للطلب الملغي:* ${money(orderToCancel.total)}
+⚠️ *حالة الطلب:* ملغي بواسطة العميل`;
+
+      fetch(WORKER_URL, { 
+        method: "POST", 
+        headers: { "Content-Type": "application/json" }, 
+        body: JSON.stringify({ text: telegramMsg }) 
+      }).catch(e => console.log("Worker error on cancel", e));
+    }
+
     orders = orders.filter(o => o.id !== orderId);
     localStorage.setItem("mn_orders", JSON.stringify(orders));
     renderMyOrders();
@@ -582,7 +619,7 @@ function sendChat(){
     let reply = generateAIResponse(text);
     messages.innerHTML += `<div class="msg ai">${reply}</div>`;
     messages.scrollTop = messages.scrollHeight;
-  }, 800 + Math.random() * 800);
+  }, 600 + Math.random() * 600);
 }
 
 function generateAIResponse(text) {
@@ -622,6 +659,36 @@ function generateAIResponse(text) {
     } else {
       const minPrice = Math.min(...products.map(p => p.price));
       return `عذراً، مفيش منتجات حالياً أقل من ${money(budget)}.\n\nأقل سعر متاح عندنا يبدأ من ${money(minPrice)}.\nهل تريد رؤية أرخص المنتجات المتاحة؟`;
+    }
+  }
+
+  // 3.5 General suggestion without specific budget
+  if (lower.includes("اقترح") || lower.includes("رشح") || lower.includes("محتاج مساعدة") || lower.includes("حائر")) {
+    if (!budgetMatch) {
+      const topPicks = products.filter(p => p.rating >= 4.8).slice(0, 3);
+      let result = `🌟 *إليك أفضل اختياراتنا المميزة حالياً حسب تقييم العملاء:*\n\n`;
+      topPicks.forEach((p, i) => {
+        result += `${i+1}. *${p.name}*\n`;
+        result += `   💰 ${money(p.price)} | ⭐ ${p.rating}\n`;
+        result += `   📝 ${p.desc}\n\n`;
+      });
+      return result + `لو عندك ميزانية محددة أو بتدور على فئة معينة (موبايل، لابتوب، سماعات)، قولي وأنا هخصصلك الاقتراح! 😊`;
+    }
+  }
+
+  // 3.6 Dynamic Offers & Discounts
+  if (lower.includes("عروض") || lower.includes("خصم") || lower.includes("تخفيضات") || lower.includes("توفير")) {
+    const onSale = products.filter(p => p.oldPrice > p.price).sort((a,b) => (b.oldPrice - b.price) - (a.oldPrice - a.price));
+    if (onSale.length > 0) {
+      let result = `🔥 *أقوى العروض والخصومات الحالية:*\n\n`;
+      onSale.slice(0, 4).forEach(p => {
+        const saving = p.oldPrice - p.price;
+        const percent = Math.round((saving / p.oldPrice) * 100);
+        result += `🎯 *${p.name}*\n`;
+        result += `   💰 السعر بعد الخصم: ${money(p.price)} (بدلاً من ${money(p.oldPrice)})\n`;
+        result += `   ✅ توفير: ${money(saving)} (${percent}%)\n\n`;
+      });
+      return result + `هل يعجبك أي عرض منهم؟ أقدر أضيفهولك في السلة فوراً! 🛒`;
     }
   }
   
@@ -784,18 +851,7 @@ function generateAIResponse(text) {
     return `🧮 *حساب سريع:*\n${num1} ${op} ${num2} = *${result}*`;
   }
   
-  // 12. Discount calculation
-  if (lower.includes("خصم") || lower.includes("توفير") || lower.includes("فرق السعر")) {
-    const productMatch = products.find(p => lower.includes(p.name.toLowerCase()) || (p.brand && lower.includes(p.brand.toLowerCase())));
-    if (productMatch && productMatch.oldPrice > productMatch.price) {
-      const saving = productMatch.oldPrice - productMatch.price;
-      const percentage = Math.round((saving / productMatch.oldPrice) * 100);
-      return `💰 *حساب التوفير على ${productMatch.name}:*\n\n💸 السعر القديم: ${money(productMatch.oldPrice)}\n💰 السعر الحالي: ${money(productMatch.price)}\n✅ *التوفير:* ${money(saving)} (${percentage}% خصم!)\n\n🎉 عرض ممتاز، اغتنم الفرصة!`;
-    }
-    return `🏷️ *عروضنا الحالية:*\n\nكل المنتجات فيها خصومات من 10% إلى 20%!\n\nأعلى توفير:\n• iPhone 15 Pro Max: وفر ${money(92000-85000)}\n• MacBook Pro 16: وفر ${money(118000-110000)}\n• LG OLED 55": وفر ${money(52000-45000)}\n\nاكتب اسم المنتج عشان أحسبلك التوفير بالظبط!`;
-  }
-  
-  // 13. Best products / recommendations
+  // 12. Best products / recommendations
   if (lower.includes("أفضل") || lower.includes("احسن") || lower.includes("أحسن") || lower.includes("توب") || lower.includes("ترند")) {
     const topRated = [...products].sort((a,b) => b.rating - a.rating).slice(0, 5);
     let result = `🏆 *أفضل 5 منتجات حسب تقييم العملاء:*\n\n`;
@@ -805,7 +861,7 @@ function generateAIResponse(text) {
     return result;
   }
   
-  // 14. Cheapest products
+  // 13. Cheapest products
   if (lower.includes("رخيص") || lower.includes("أرخص") || lower.includes("اقل سعر") || lower.includes("اقل")) {
     const cheapest = [...products].sort((a,b) => a.price - b.price).slice(0, 5);
     let result = `💰 *أرخص 5 منتجات في المتجر:*\n\n`;
@@ -815,7 +871,7 @@ function generateAIResponse(text) {
     return result;
   }
   
-  // 15. Specific product details
+  // 14. Specific product details
   for (const p of products) {
     if (lower.includes(p.name.toLowerCase()) || (p.brand && lower.includes(p.brand.toLowerCase()))) {
       const discount = p.oldPrice > p.price ? Math.round(((p.oldPrice - p.price) / p.oldPrice) * 100) : 0;
@@ -823,23 +879,23 @@ function generateAIResponse(text) {
     }
   }
   
-  // 16. How are you / personal
+  // 15. How are you / personal
   if (lower.includes("عامل ايه") || lower.includes("ازيك") || lower.includes("how are you")) {
     return `😊 الحمد لله تمام يا فندم!\nأنا هنا عشان أساعدك في أي حاجة.\n\nمحتاج مساعدة في إيه النهاردة؟`;
   }
   
-  // 17. Who are you
+  // 16. Who are you
   if (lower.includes("مين انت") || lower.includes("انت مين") || lower.includes("عرفني") || lower.includes("who are you")) {
     return `🤖 *أنا مساعد محمد نصر الذكي!*\n\n✅ مصمم عشان أساعدك في:\n• اختيار المنتج المناسب لميزانيتك\n• المقارنة بين المنتجات\n• حساب التوفير والخصومات\n• معلومات الشحن والضمان\n• تتبع طلبك\n\n🎯 اسألني أي حاجة وأنا هجاوبك فوراً!`;
   }
   
-  // 18. Contact info
+  // 17. Contact info
   if (lower.includes("تواصل") || lower.includes("رقم") || lower.includes("واتساب") || lower.includes("contact")) {
     return `📞 *طرق التواصل معنا:*\n\n🤖 الشات الذكي (أنا!): 24/7\n📧 البريد: support@mohamednasr.store\n📱 واتساب: قريباً\n\n🕒 *مواعيد العمل:*\nالسبت - الخميس: 9 ص - 11 م\nالجمعة: 2 م - 11 م`;
   }
   
-  // 19. Fallback - Smart response
-  return `🤔 مش فاهم سؤالك بالظبط، بس أقدر أساعدك في:\n\n📱 *اقتراح منتجات:* "اقترح هاتف بـ 15000 جنيه"\n📊 *مقارنة:* "فرق بين آيفون و سامسونج"\n🔍 *بحث:* "اعرضلي لابتوبات قيمنج"\n💰 *حسابات:* "كام هيوفر لو اشتريت آيفون 15؟"\n🚚 *شحن:* "إمتى يوصل الطلب؟"\n🛡️ *ضمان:* "سياسة الإرجاع إيه؟"\n📦 *تتبع:* "فين طلبي؟"\n\nجرب تسألني بطريقة تانية! 😊`;
+  // 18. Fallback - Smart response
+  return `🤔 مش فاهم سؤالك بالظبط، بس أقدر أساعدك في:\n\n📱 *اقتراح منتجات:* "اقترح هاتف بـ 15000 جنيه"\n📊 *مقارنة:* "فرق بين آيفون و سامسونج"\n🔍 *بحث:* "اعرضلي لابتوبات قيمنج"\n💰 *عروض:* "وريني أقوى الخصومات"\n🚚 *شحن:* "إمتى يوصل الطلب؟"\n🛡️ *ضمان:* "سياسة الإرجاع إيه؟"\n📦 *تتبع:* "فين طلبي؟"\n\nجرب تسألني بطريقة تانية! 😊`;
 }
 
 // Initialize
